@@ -9,7 +9,7 @@ use self::web_sys::{AudioContext, AudioContextOptions};
 use crate::{
     BuildStreamError, Data, DefaultStreamConfigError, DeviceNameError, DevicesError,
     PauseStreamError, PlayStreamError, StreamConfig, StreamError, SupportedStreamConfig,
-    SupportedStreamConfigRange, SupportedStreamConfigsError,
+    SupportedStreamConfigRange, SupportedStreamConfigsError, InputCallbackInfo, OutputCallbackInfo
 };
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, RwLock};
@@ -158,8 +158,8 @@ impl DeviceTrait for Device {
         _error_callback: E,
     ) -> Result<Self::Stream, BuildStreamError>
     where
-        D: FnMut(&Data) + Send + 'static,
-        E: FnMut(StreamError) + Send + 'static,
+        D: FnMut(&Data, &InputCallbackInfo) + Send + 'static,
+        E: FnMut(StreamError) + Send + 'static
     {
         unimplemented!()
     }
@@ -173,8 +173,8 @@ impl DeviceTrait for Device {
         _error_callback: E,
     ) -> Result<Self::Stream, BuildStreamError>
     where
-        D: FnMut(&mut Data) + Send + 'static,
-        E: FnMut(StreamError) + Send + 'static,
+        D: FnMut(&mut Data, &OutputCallbackInfo) + Send + 'static,
+        E: FnMut(StreamError) + Send + 'static
     {
         assert_eq!(
             sample_format,
@@ -259,7 +259,7 @@ impl DeviceTrait for Device {
                         let sample_format = SampleFormat::F32;
                         let mut data = unsafe { Data::from_parts(data, len, sample_format) };
                         let mut data_callback = data_callback_handle.lock().unwrap();
-                        (data_callback.deref_mut())(&mut data);
+                        (data_callback.deref_mut())(&mut data, &OutputCallbackInfo {});
                     }
 
                     // Deinterleave the sample data and copy into the audio context buffer.

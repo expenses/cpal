@@ -1,7 +1,7 @@
 extern crate core_foundation_sys;
 extern crate coreaudio;
 
-use self::core_foundation_sys::string::{CFStringGetCStringPtr, CFStringRef};
+use self::core_foundation_sys::string::{CFStringGetCString, CFStringGetCStringPtr, CFStringRef};
 use self::coreaudio::audio_unit::render_callback::{self, data};
 use self::coreaudio::audio_unit::{AudioUnit, Element, Scope};
 use self::coreaudio::sys::{
@@ -21,9 +21,9 @@ use self::coreaudio::sys::{
 use crate::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crate::{
     BackendSpecificError, BuildStreamError, ChannelCount, Data, DefaultStreamConfigError,
-    DeviceNameError, DevicesError, PauseStreamError, PlayStreamError, SampleFormat, SampleRate,
-    StreamConfig, StreamError, SupportedStreamConfig, SupportedStreamConfigRange,
-    SupportedStreamConfigsError,
+    DeviceNameError, DevicesError, InputCallbackInfo, OutputCallbackInfo, PauseStreamError,
+    PlayStreamError, SampleFormat, SampleRate, StreamConfig, StreamError, SupportedStreamConfig,
+    SupportedStreamConfigRange, SupportedStreamConfigsError,
 };
 use std::cell::RefCell;
 use std::ffi::CStr;
@@ -111,7 +111,7 @@ impl DeviceTrait for Device {
         error_callback: E,
     ) -> Result<Self::Stream, BuildStreamError>
     where
-        D: FnMut(&Data) + Send + 'static,
+        D: FnMut(&Data, &InputCallbackInfo) + Send + 'static,
         E: FnMut(StreamError) + Send + 'static,
     {
         Device::build_input_stream_raw(self, config, sample_format, data_callback, error_callback)
@@ -125,7 +125,7 @@ impl DeviceTrait for Device {
         error_callback: E,
     ) -> Result<Self::Stream, BuildStreamError>
     where
-        D: FnMut(&mut Data) + Send + 'static,
+        D: FnMut(&mut Data, &OutputCallbackInfo) + Send + 'static,
         E: FnMut(StreamError) + Send + 'static,
     {
         Device::build_output_stream_raw(self, config, sample_format, data_callback, error_callback)
@@ -159,9 +159,30 @@ impl Device {
 
             let c_string: *const c_char = CFStringGetCStringPtr(device_name, kCFStringEncodingUTF8);
             if c_string == null() {
-                let description = "core foundation unexpectedly returned null string".to_string();
-                let err = BackendSpecificError { description };
-                return Err(err.into());
+                let status = AudioObjectGetPropertyData(
+                    self.audio_device_id,
+                    &property_address as *const _,
+                    0,
+                    null(),
+                    &data_size as *const _ as *mut _,
+                    &device_name as *const _ as *mut _,
+                );
+                check_os_status(status)?;
+                let mut buf: [i8; 255] = [0; 255];
+                let result = CFStringGetCString(
+                    device_name,
+                    buf.as_mut_ptr(),
+                    buf.len() as _,
+                    kCFStringEncodingUTF8,
+                );
+                if result == 0 {
+                    let description =
+                        "core foundation failed to return device name string".to_string();
+                    let err = BackendSpecificError { description };
+                    return Err(err.into());
+                }
+                let name: &CStr = unsafe { CStr::from_ptr(buf.as_ptr()) };
+                return Ok(name.to_str().unwrap().to_owned());
             }
             CStr::from_ptr(c_string as *mut _)
         };
@@ -486,7 +507,7 @@ impl Device {
         _error_callback: E,
     ) -> Result<Stream, BuildStreamError>
     where
-        D: FnMut(&Data) + Send + 'static,
+        D: FnMut(&Data, &InputCallbackInfo) + Send + 'static,
         E: FnMut(StreamError) + Send + 'static,
     {
         // The scope and element for working with a device's input stream.
@@ -653,7 +674,8 @@ impl Device {
             let data = data as *mut ();
             let len = (data_byte_size as usize / bytes_per_channel) as usize;
             let data = Data::from_parts(data, len, sample_format);
-            data_callback(&data);
+            let info = InputCallbackInfo {};
+            data_callback(&data, &info);
             Ok(())
         })?;
 
@@ -674,7 +696,7 @@ impl Device {
         _error_callback: E,
     ) -> Result<Stream, BuildStreamError>
     where
-        D: FnMut(&mut Data) + Send + 'static,
+        D: FnMut(&mut Data, &OutputCallbackInfo) + Send + 'static,
         E: FnMut(StreamError) + Send + 'static,
     {
         let mut audio_unit = audio_unit_from_device(self, false)?;
@@ -704,7 +726,8 @@ impl Device {
             let data = data as *mut ();
             let len = (data_byte_size as usize / bytes_per_channel) as usize;
             let mut data = Data::from_parts(data, len, sample_format);
-            data_callback(&mut data);
+            let info = OutputCallbackInfo {};
+            data_callback(&mut data, &info);
             Ok(())
         })?;
 
